@@ -1,0 +1,255 @@
+import sqlite3
+import math
+import tkinter as tk
+from tkinter import ttk, messagebox
+from datetime import date
+
+DB_NAME = "crypto_mining.db"
+
+
+def connect_db():
+    conn = sqlite3.connect(DB_NAME)
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def initialize_database():
+    with connect_db() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS mining_farms (
+                farm_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                farm_name TEXT NOT NULL UNIQUE,
+                contact_email TEXT NOT NULL
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS mining_sessions (
+                session_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                farm_id INTEGER NOT NULL,
+                rig_identifier TEXT NOT NULL,
+                session_date TEXT NOT NULL,
+                FOREIGN KEY (farm_id) REFERENCES mining_farms(farm_id)
+                    ON DELETE CASCADE
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS hash_readings (
+                reading_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                reading_type TEXT NOT NULL,
+                measured_value REAL NOT NULL CHECK (measured_value >= 0),
+                FOREIGN KEY (session_id) REFERENCES mining_sessions(session_id)
+                    ON DELETE CASCADE
+            )
+        """)
+
+        # Add sample data only when all three tables are empty.
+        cur.execute("SELECT COUNT(*) FROM mining_farms")
+        if cur.fetchone()[0] == 0:
+            cur.execute("INSERT INTO mining_farms (farm_name, contact_email) VALUES (?, ?)",
+                        ("Alpha Mining Farm", "alpha@example.com"))
+            farm_id = cur.lastrowid
+            cur.execute("INSERT INTO mining_sessions (farm_id, rig_identifier, session_date) VALUES (?, ?, ?)",
+                        (farm_id, "Rig-ASIC-07", date.today().isoformat()))
+            session_id = cur.lastrowid
+            cur.execute("INSERT INTO hash_readings (session_id, reading_type, measured_value) VALUES (?, ?, ?)",
+                        (session_id, "Hashrate (TH/s)", 125.5))
+
+
+class MiningDashboard:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Crypto Mining Farm & Rig Performance Dashboard")
+        self.root.geometry("1120x720")
+        self.root.minsize(900, 600)
+        self.build_ui()
+        self.refresh_all()
+
+    def build_ui(self):
+        heading = ttk.Label(self.root, text="Crypto Mining Farm & Rig Performance Dashboard",
+                            font=("Arial", 17, "bold"))
+        heading.pack(pady=(12, 8))
+
+        insert_frame = ttk.LabelFrame(self.root, text="Insert Mining Record", padding=10)
+        insert_frame.pack(fill="x", padx=12, pady=6)
+
+        self.farm_var = tk.StringVar()
+        self.email_var = tk.StringVar()
+        self.rig_var = tk.StringVar()
+        self.type_var = tk.StringVar(value="Hashrate (TH/s)")
+        self.value_var = tk.StringVar()
+
+        fields = [
+            ("Farm Name", self.farm_var),
+            ("Operator Email (optional)", self.email_var),
+            ("Rig Identifier", self.rig_var),
+            ("Reading Type", self.type_var),
+            ("Measured Value", self.value_var),
+        ]
+        for col, (label, variable) in enumerate(fields):
+            ttk.Label(insert_frame, text=label).grid(row=0, column=col, padx=5, sticky="w")
+            if label == "Reading Type":
+                widget = ttk.Combobox(insert_frame, textvariable=variable, width=19,
+                                      values=["Hashrate (TH/s)", "Power Draw (W)", "Temperature (°C)"], state="normal")
+            else:
+                widget = ttk.Entry(insert_frame, textvariable=variable, width=21)
+            widget.grid(row=1, column=col, padx=5, pady=5, sticky="ew")
+        ttk.Button(insert_frame, text="Add Record", command=self.add_record).grid(
+            row=1, column=len(fields), padx=8, sticky="ew")
+
+        delete_frame = ttk.LabelFrame(self.root, text="Delete Records", padding=10)
+        delete_frame.pack(fill="x", padx=12, pady=6)
+        self.delete_type_var = tk.StringVar(value="Mining Farm")
+        self.delete_target_var = tk.StringVar()
+        ttk.Label(delete_frame, text="Delete type").grid(row=0, column=0, padx=5, sticky="w")
+        self.delete_type = ttk.Combobox(delete_frame, textvariable=self.delete_type_var,
+                                        values=["Mining Farm", "Mining Session", "Hash Reading"],
+                                        state="readonly", width=20)
+        self.delete_type.grid(row=1, column=0, padx=5, pady=4)
+        self.delete_type.bind("<<ComboboxSelected>>", lambda _e: self.refresh_delete_options())
+        ttk.Label(delete_frame, text="Select record").grid(row=0, column=1, padx=5, sticky="w")
+        self.delete_target = ttk.Combobox(delete_frame, textvariable=self.delete_target_var,
+                                          state="readonly", width=75)
+        self.delete_target.grid(row=1, column=1, padx=5, pady=4, sticky="ew")
+        ttk.Button(delete_frame, text="Delete Selected", command=self.delete_selected).grid(
+            row=1, column=2, padx=8)
+        delete_frame.columnconfigure(1, weight=1)
+
+        notebook = ttk.Notebook(self.root)
+        notebook.pack(fill="both", expand=True, padx=12, pady=8)
+        self.trees = {}
+        self.columns = {
+            "Master Manifest": ["Session ID", "Farm Name", "Rig Identifier", "Session Date", "Reading Type", "Measured Value"],
+            "Mining Farms": ["Farm ID", "Farm Name", "Contact Email"],
+            "Mining Sessions": ["Session ID", "Farm ID", "Rig Identifier", "Session Date"],
+            "Hash Readings": ["Reading ID", "Session ID", "Reading Type", "Measured Value"],
+        }
+        for tab_name, cols in self.columns.items():
+            frame = ttk.Frame(notebook, padding=5)
+            notebook.add(frame, text=tab_name)
+            tree = ttk.Treeview(frame, columns=cols, show="headings")
+            yscroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+            xscroll = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
+            tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+            tree.grid(row=0, column=0, sticky="nsew")
+            yscroll.grid(row=0, column=1, sticky="ns")
+            xscroll.grid(row=1, column=0, sticky="ew")
+            frame.rowconfigure(0, weight=1)
+            frame.columnconfigure(0, weight=1)
+            for col in cols:
+                tree.heading(col, text=col)
+                tree.column(col, width=150, minwidth=100, anchor="center")
+            self.trees[tab_name] = tree
+
+    def add_record(self):
+        farm = self.farm_var.get().strip()
+        email = self.email_var.get().strip() or "Not provided"
+        rig = self.rig_var.get().strip()
+        reading_type = self.type_var.get().strip()
+        raw_value = self.value_var.get().strip()
+
+        if not all([farm, rig, reading_type, raw_value]):
+            messagebox.showwarning("Missing information", "Please fill in Farm Name, Rig Identifier, Reading Type and Measured Value.")
+            return
+        try:
+            measured_value = float(raw_value)
+            if not math.isfinite(measured_value) or measured_value < 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Invalid value", "Measured Value must be a non-negative number.")
+            return
+
+        try:
+            with connect_db() as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT farm_id FROM mining_farms WHERE farm_name = ?", (farm,))
+                result = cur.fetchone()
+                if result:
+                    farm_id = result[0]
+                else:
+                    cur.execute("INSERT INTO mining_farms (farm_name, contact_email) VALUES (?, ?)", (farm, email))
+                    farm_id = cur.lastrowid
+                cur.execute("INSERT INTO mining_sessions (farm_id, rig_identifier, session_date) VALUES (?, ?, ?)",
+                            (farm_id, rig, date.today().isoformat()))
+                session_id = cur.lastrowid
+                cur.execute("INSERT INTO hash_readings (session_id, reading_type, measured_value) VALUES (?, ?, ?)",
+                            (session_id, reading_type, measured_value))
+            self.farm_var.set("")
+            self.email_var.set("")
+            self.rig_var.set("")
+            self.type_var.set("Hashrate (TH/s)")
+            self.value_var.set("")
+            self.refresh_all()
+            messagebox.showinfo("Success", "Mining session and hash reading added successfully.")
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", str(exc))
+
+    def refresh_all(self):
+        queries = {
+            "Master Manifest": """SELECT s.session_id, f.farm_name, s.rig_identifier,
+                                      s.session_date, h.reading_type, h.measured_value
+                               FROM mining_sessions s
+                               JOIN mining_farms f ON f.farm_id = s.farm_id
+                               JOIN hash_readings h ON h.session_id = s.session_id
+                               ORDER BY s.session_id, h.reading_id""",
+            "Mining Farms": "SELECT farm_id, farm_name, contact_email FROM mining_farms ORDER BY farm_id",
+            "Mining Sessions": "SELECT session_id, farm_id, rig_identifier, session_date FROM mining_sessions ORDER BY session_id",
+            "Hash Readings": "SELECT reading_id, session_id, reading_type, measured_value FROM hash_readings ORDER BY reading_id",
+        }
+        try:
+            with connect_db() as conn:
+                for tab, query in queries.items():
+                    rows = conn.execute(query).fetchall()
+                    tree = self.trees[tab]
+                    tree.delete(*tree.get_children())
+                    for row in rows:
+                        tree.insert("", "end", values=row)
+            self.refresh_delete_options()
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", str(exc))
+
+    def refresh_delete_options(self):
+        kind = self.delete_type_var.get()
+        queries = {
+            "Mining Farm": ("SELECT farm_id, farm_name FROM mining_farms ORDER BY farm_id", lambda r: f"Farm ID {r[0]} — {r[1]}"),
+            "Mining Session": ("SELECT session_id, rig_identifier FROM mining_sessions ORDER BY session_id", lambda r: f"Session ID {r[0]} — {r[1]}"),
+            "Hash Reading": ("SELECT reading_id, reading_type FROM hash_readings ORDER BY reading_id", lambda r: f"Reading ID {r[0]} — {r[1]}"),
+        }
+        query, formatter = queries[kind]
+        with connect_db() as conn:
+            rows = conn.execute(query).fetchall()
+        self.delete_options = {formatter(row): row[0] for row in rows}
+        values = list(self.delete_options.keys())
+        self.delete_target.configure(values=values)
+        self.delete_target_var.set(values[0] if values else "")
+
+    def delete_selected(self):
+        selected = self.delete_target_var.get()
+        if not selected or selected not in self.delete_options:
+            messagebox.showwarning("Select a record", "Please select a valid record to delete.")
+            return
+        record_id = self.delete_options[selected]
+        kind = self.delete_type_var.get()
+        table_and_column = {
+            "Mining Farm": ("mining_farms", "farm_id"),
+            "Mining Session": ("mining_sessions", "session_id"),
+            "Hash Reading": ("hash_readings", "reading_id"),
+        }
+        table, column = table_and_column[kind]
+        if not messagebox.askyesno("Confirm deletion", f"Delete selected {kind.lower()}? Related child records may also be deleted."):
+            return
+        try:
+            with connect_db() as conn:
+                conn.execute(f"DELETE FROM {table} WHERE {column} = ?", (record_id,))
+            self.refresh_all()
+            messagebox.showinfo("Deleted", f"Selected {kind.lower()} deleted successfully.")
+        except sqlite3.Error as exc:
+            messagebox.showerror("Database error", str(exc))
+
+
+if __name__ == "__main__":
+    initialize_database()
+    root = tk.Tk()
+    app = MiningDashboard(root)
+    root.mainloop()

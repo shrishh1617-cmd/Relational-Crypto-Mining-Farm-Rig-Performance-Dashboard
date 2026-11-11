@@ -1,0 +1,22 @@
+CE4 PROJECT SUBMISSION
+Registration Number: 25SSDS415071
+Project: Crypto Mining Farm & Rig Performance Dashboard
+
+CONTENTS
+- crypto_mining_dashboard_final.py: Python Tkinter + SQLite application
+- crypto_mining.db: SQLite database used by the application
+- Crypto_Mining_Dashboard_Project_Report.docx: project documentation and viva questions
+- ER_Diagram.png: database relationship diagram
+- Screenshots/: seven screenshots showing the application tabs and test evidence
+
+HOW TO RUN
+1. Install Python 3 on Windows.
+2. Keep the Python file and crypto_mining.db in the same folder.
+3. Open a terminal in that folder.
+4. Run: python crypto_mining_dashboard_final.py
+
+The application uses Python's built-in sqlite3 and tkinter modules. Tkinter requires a desktop environment.
+
+DATABASE CHECK
+The supplied database was checked for SQLite integrity and foreign-key violations.
+It contains one mining farm, one mining session and one hash reading (the Alpha Mining Farm sample record).
